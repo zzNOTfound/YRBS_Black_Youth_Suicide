@@ -1,0 +1,188 @@
+---
+title: "YRBS_Combined"
+author: "Xueqing Zhou"
+date: "2022-11-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r library, message=FALSE}
+## load the libraries
+library(readr)
+library(survey)
+library(dplyr)
+library(tidyverse)
+library(gtsummary)
+options(survey.lonely.psu="adjust")
+```
+
+```{r, message=FALSE}
+## read in the data
+yrbs_all <- read.csv("sadc_2019_national.csv")
+```
+
+## Data Cleaning
+
+```{r}
+## subset black data and correct the outcome variable
+black_data <- yrbs_all %>%
+  ## filter only "Black or African American"
+  filter(race7 == "Black or African American") %>%
+  ## correct the outcome variable (1 - Yes, 2 - No)
+  mutate(qn28 = replace(qn28, which(qn26 == 2 & qn27 == 2), 2)) %>%
+  mutate(qn29 = replace(qn29, which(qn26 == 2 & qn27 == 2), 2)) %>%
+  mutate(qn29 = replace(qn29, which(qn28 == 2), 2)) %>%
+  mutate(qn28 = replace(qn28, which(qn29 == 1), 1)) %>%
+  mutate(qn27 = replace(qn27, which(qn26 == 2), 2)) %>%
+  mutate(qn28 = replace(qn28, which(qn26 == 2), 2)) %>%
+  mutate(qn29 = replace(qn29, which(qn26 == 2), 2)) %>%
+  mutate(qn26 = replace(qn26, which(qn27 == 1), 1)) %>%
+  mutate(qn26 = replace(qn26, which(qn28 == 1), 1)) %>%
+  mutate(qn26 = replace(qn26, which(qn29 == 1), 1)) %>%
+  #drop_na(qn26:qn29) %>%
+  ## change '2 - No' to '0 - No' for better analysis
+  mutate(across(qn26:qn29, ~ ifelse(. == 2, 0, .)))
+```
+
+
+## Survey Weighted
+
+```{r}
+# weighted design data
+yrbsdes <- svydesign(id=~PSU, 
+                     weight=~weight, 
+                     strata=~stratum, 
+                     data=black_data, 
+                     nest=TRUE)
+
+yrbsdes_all <- svydesign(id=~PSU, 
+                     weight=~weight, 
+                     strata=~stratum, 
+                     data=yrbs_all, 
+                     nest=TRUE)
+
+#tbl_svysummary(data = yrbsdes, include = q26)
+#svytotal(~qn26, yrbsdes)
+#svymean(~qn26, yrbsdes)
+```
+
+
+## Dependent variables
+
+```{r}
+## *should drop ppl with no answers for race*
+svytable(~race7 + year, yrbsdes_all, na.action = na.pass, exclude = NULL)
+prop.table(svytable(~race7 + year, yrbsdes_all), 2) %>% round(3)
+
+## *should drop NAs for analysis*
+## weighted but not adjusted, weighted and adjusted　
+svytable(~q26 + year, yrbsdes, na.action = na.pass, exclude = NULL)
+svytable(~qn26 + year, yrbsdes, na.action = na.pass, exclude = NULL)
+prop.table(svytable(~qn26 + year, yrbsdes), 2) %>% round(3)
+
+svytable(~q27 + year, yrbsdes, na.action = na.pass, exclude = NULL)
+svytable(~qn27 + year, yrbsdes, na.action = na.pass, exclude = NULL)
+prop.table(svytable(~qn27 + year, yrbsdes), 2) %>% round(3)
+
+svytable(~q28 + year, yrbsdes, na.action = na.pass, exclude = NULL)
+svytable(~qn28 + year, yrbsdes, na.action = na.pass, exclude = NULL)
+prop.table(svytable(~qn28 + year, yrbsdes), 2) %>% round(3)
+
+svytable(~q29 + year, yrbsdes, na.action = na.pass, exclude = NULL)
+svytable(~qn29 + year, yrbsdes, na.action = na.pass, exclude = NULL)
+prop.table(svytable(~qn29 + year, yrbsdes), 2) %>% round(3)
+```
+
+
+## Raw Count
+
+```{r}
+## prevalence of each year (count of each year?)
+prev_by_year <- black_data %>% 
+  group_by(year) %>%
+  summarise(across(qn26:qn29, sum))
+
+
+## prevalence vs. 4 outcome variables by year
+prev_by_year %>%
+  pivot_longer(qn26:qn29,
+               names_to = "outcomes",
+               values_to = "prevalence") %>%
+  group_by(year) %>%
+  ggplot(aes(outcomes, prevalence, fill = as.factor(year))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Prevalence vs. 4 Outcome Variables by Year",
+       x = "Outcome Variables",
+       y = "Prevalence",
+       fill = "Year")
+
+
+## prevalence vs. year by 4 outcome variables
+prev_by_year %>%
+  pivot_longer(qn26:qn29,
+               names_to = "outcomes",
+               values_to = "prevalence") %>%
+  group_by(outcomes) %>%
+  ggplot(aes(as.factor(year), prevalence, fill = outcomes)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Prevalence vs. Year by 4 Outcome Variables",
+       x = "Year",
+       y = "Prevalence",
+       fill = "Outcome Variables")
+```
+
+## No correction outcome variables
+
+```{r}
+blk_data_origin <- yrbs_all %>%
+  filter(race7 == "Black or African American") %>%
+  drop_na(qn26:qn29) %>%
+  ## change '2 - No' to '0 - No' for better analysis
+  mutate(across(qn26:qn29, ~ ifelse(. == 2, 0, .)))
+
+## prevalence of each year (count of each year?)
+prev <- blk_data_origin %>% 
+  group_by(year) %>%
+  summarise(across(qn26:qn29, sum))
+
+## prevalence vs. 4 outcome variables by year
+prev %>%
+  pivot_longer(qn26:qn29,
+               names_to = "outcomes",
+               values_to = "prevalence") %>%
+  group_by(year) %>%
+  ggplot(aes(outcomes, prevalence, fill = as.factor(year))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Prevalence vs. 4 Outcome Variables by Year",
+       x = "Outcome Variables",
+       y = "Prevalence",
+       fill = "Year")
+
+## prevalence vs. year by 4 outcome variables
+prev_by_year %>%
+  pivot_longer(qn26:qn29,
+               names_to = "outcomes",
+               values_to = "prevalence") %>%
+  group_by(outcomes) %>%
+  ggplot(aes(as.factor(year), prevalence, fill = outcomes)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Prevalence vs. Year by 4 Outcome Variables",
+       x = "Year",
+       y = "Prevalence",
+       fill = "Outcome Variables")
+
+## *should drop ppl with no answer for races*
+yrbs_all %>%
+  group_by(year) %>%
+  mutate(total_num = n()) %>%
+  filter(race7 == "Black or African American") %>%
+  mutate(black_num = n()) %>%
+  filter(!duplicated(year)) %>%
+  select(year, total_num, black_num) %>%
+  mutate(black_prop = round(black_num / total_num, 3))
+
+table(yrbs_all$race7)
+```
