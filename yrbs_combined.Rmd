@@ -111,27 +111,32 @@ prev_data <- data.frame()
 ## format: keep tail 0
 for (i in seq_along(qn_dependent_colnames)){
   FORMULA = as.formula(paste("~", qn_dependent_colnames[i], "+ year"))
-  qn_yes <- format(round(prop.table(svytable(FORMULA, yrbsdes), 2)[-1, ] * 100, 3), nsmall = 3)
-  qn_na <- format(round(prop.table(svytable(FORMULA, yrbsdes, 
-                                   na.action = na.pass, exclude = NULL), 2)[3, ] * 100, 3), nsmall = 3)
+  qn_yes <- round(prop.table(svytable(FORMULA, yrbsdes), 2)[-1, ] * 100, 3)
+  qn_na <- round(prop.table(svytable(FORMULA, yrbsdes, 
+                                   na.action = na.pass, exclude = NULL), 2)[3, ] * 100, 3)
   tbl <- rbind(qn_yes, qn_na)
   rownames(tbl) <- NULL
   prev_data <- rbind(prev_data, tbl)
 }
 
 ## bind indicator and numbers together and add percentage sign
+## *percentage sign: change column from numeric to character*
 prev_tbl <- bind_cols(prev_indicator, prev_data) %>%
   mutate(across("1991":"2019", ~ paste0(.x, "%")))
 
 prev_tbl
+
+## total % missingness by question
+bind_cols(prev_indicator, prev_data) %>%
+  filter(type == "missing") %>%
+  mutate(total = rowMeans(.[, 3:17]))
 ```
 
 
 ## Combined independent variable summarization
 
 ```{r}
-## extract independent variable names
-## except: age, sex, grade, sexid, sexpart, q65, q66
+## extract independent variable names (only qn)
 qn_ind_colnames <- black_data %>%
   select(num_range("qn", 8:89), 
         -qn26, -qn27, -qn28, -qn29) %>%
@@ -144,34 +149,106 @@ ind_indicator <- data.frame(question = rep(qn_ind_colnames, each = 2),
 ## create empty dataframe to store numbers
 ind_data <- data.frame()
 
-## format: keep tail 0
 for (i in seq_along(qn_ind_colnames)){
   FORMULA = as.formula(paste("~", qn_ind_colnames[i], "+ year"))
-  qn_yes <- format(round(prop.table(svytable(FORMULA, yrbsdes,
-                                             na.action = na.pass), 2)[1, ] * 100, 3), nsmall = 3)
+  qn_yes <- round(prop.table(svytable(FORMULA, yrbsdes,
+                                             na.action = na.pass), 2)[1, ] * 100, 3)
   qn_na_all <- prop.table(svytable(FORMULA, yrbsdes, 
                                    na.action = na.pass, exclude = NULL), 2)
-  qn_na <- format(round(qn_na_all[nrow(qn_na_all), ] * 100, 3), nsmall = 3)
+  qn_na <- round(qn_na_all[nrow(qn_na_all), ] * 100, 3)
   
   tbl <- rbind(qn_yes, qn_na)
   rownames(tbl) <- NULL
   ind_data <- rbind(ind_data, tbl)
 }
 
-## bind indicator and numbers together and add percentage sign
-ind_tbl <- bind_cols(ind_indicator, ind_data) %>%
-  mutate(across("1991":"2019", ~ paste0(.x, "%")))
-  #mutate_all(funs(ifelse(. == "NaN%", "NaN", .)))
-
-ind_tbl
+## only qn table
+ind_qn_tbl <- bind_cols(ind_indicator, ind_data)
 
 
-## age, sex, grade, sexid, sexpart, q65, q66: need to combine together
-round(prop.table(svytable(~age + year, yrbsdes, na.action = na.pass), 2) * 100, 3) %>%
-  as.data.frame() %>%
-  pivot_wider(names_from = year, values_from = Freq) %>%
-  rename(type = age) %>%
-  mutate(question = rep("age", each = nrow(.)), .before = 1)
+## extract independent variable names: age, sex, grade, sexid, sexpart, q65, q66
+qn_other_colnames <- black_data %>%
+  select(age, sex, grade, sexid, sexpart, q65, q66) %>%
+  colnames()
+
+## create empty dataframe to store numbers
+ind_other <- data.frame()
+
+for (i in seq_along(qn_other_colnames)){
+  FORMULA = as.formula(paste("~", qn_other_colnames[i], "+ year"))
+  
+  qn_response <- round(prop.table(svytable(FORMULA, yrbsdes,
+                                           na.action = na.pass), 2) * 100, 3) %>%
+    as.data.frame() %>%
+    pivot_wider(names_from = year, values_from = Freq) %>%
+    rename(type = qn_other_colnames[i]) %>%
+    mutate(question = rep(all_of(qn_other_colnames[i]), each = nrow(.)), .before = 1) %>%
+    mutate(type = as.character(type))
+  
+  qn_na <- round(prop.table(svytable(FORMULA, yrbsdes, 
+                                     na.action = na.pass, exclude = NULL), 2) * 100, 3) %>%
+    as.data.frame() %>%
+    pivot_wider(names_from = year, values_from = Freq) %>%
+    rename(type = qn_other_colnames[i]) %>%
+    mutate(question = rep(all_of(qn_other_colnames[i]), each = nrow(.)), .before = 1) %>%
+    mutate(type = as.character(type)) %>%
+    filter(row_number() == n()) %>%
+    mutate(type = ifelse(is.na(type), "missing", type))
+   
+  tbl <- rbind(qn_response, qn_na)
+  ind_other <- rbind(ind_other, tbl)
+}
+
+## all independent variable summarization dataframe
+ind_tbl <- rbind(ind_qn_tbl, ind_other) %>%
+  mutate_all(~ifelse(is.nan(.), NA, .))
+  ## add percentage sign: *will change variable type*
+#  mutate(across("1991":"2019", ~ ifelse(!is.na(.), paste0(.x, "%"), .x)))
+
+## calculate overall % missingness for each variable during the years it was collected
+ind_col <- ind_tbl %>% 
+   select(-question, -type) %>% 
+   colnames()
+
+ind_tbl[,ind_col][ind_tbl[,ind_col] == 100.00] <- NA
+ind_tbl$overall_missing <- round(rowMeans(ind_tbl[,3:17], na.rm = TRUE), 3)
+ind_tbl <- ind_tbl %>% 
+  mutate(overall_missing = ifelse(type != 'missing', NA, overall_missing))
+ind_tbl[ind_tbl$type == "missing", 
+        ind_col][is.na(ind_tbl[ind_tbl$type == "missing", ind_col])] <- 100.00
+
+sort_all_missing <- ind_tbl %>%
+  arrange(desc(overall_missing))
+
+## drop >20% missingness, calculate complete case number (by year and total)
+less_than_20 <- sort_all_missing %>%
+  filter(overall_missing < 20)
+less_than_20[,ind_col][less_than_20[,ind_col] == 100.00] <- NA
+
+year_array <- as.character(unique(black_data$year))
+complete <- data.frame(matrix(nrow = 1))
+
+for (i in 1:length(year_array)){
+  collected_year <- less_than_20 %>%
+    select(question, type, year_array[i]) %>%
+    na.omit() %>%
+    select(question) %>%
+    unlist() %>%
+    unname()
+  
+  complete_num <- black_data %>%
+    filter(year == year_array[i]) %>%
+    select(all_of(collected_year)) %>%
+    na.omit() %>%
+    summarise(nrow(.))
+  
+  complete <- cbind(complete, complete_num)
+}
+
+complete <- complete[,-1]
+colnames(complete) = year_array
+
+complete
 ```
 
 
